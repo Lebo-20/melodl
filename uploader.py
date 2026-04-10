@@ -68,7 +68,8 @@ async def upload_progress(current, total, event, title, ep_info, start_time):
 async def upload_drama(client: TelegramClient, chat_id: int, 
                        title: str, description: str, 
                        poster_url: str, video_path: str,
-                       ep_info: str = "Full"):
+                       ep_info: str = "Full",
+                       topic_id: int = None):
     """
     Uploads the drama information and merged video to Telegram.
     """
@@ -101,16 +102,17 @@ async def upload_drama(client: TelegramClient, chat_id: int,
                     poster_path or poster_url,
                     caption=caption,
                     parse_mode='md',
-                    force_document=False
+                    force_document=False,
+                    reply_to=topic_id
                 )
             else:
                 # Fallback to message if no poster
-                await client.send_message(chat_id, caption, parse_mode='md')
+                await client.send_message(chat_id, caption, parse_mode='md', reply_to=topic_id)
         except Exception as e:
             logger.warning(f"Failed to send poster/caption: {e}")
             # Try to send just the caption as text if file fails
             try:
-                await client.send_message(chat_id, caption, parse_mode='md')
+                await client.send_message(chat_id, caption, parse_mode='md', reply_to=topic_id)
             except: pass
         
         # Cleanup poster temp file
@@ -118,7 +120,7 @@ async def upload_drama(client: TelegramClient, chat_id: int,
             try: os.remove(poster_path)
             except: pass
         
-        status_msg = await client.send_message(chat_id, f"📤 Ekstraksi info & upload video: **{title}**...")
+        status_msg = await client.send_message(chat_id, f"📤 Ekstraksi info & upload video: **{title}**...", reply_to=topic_id)
         
         # 2. Extract Duration & Dimensions
         duration = 0
@@ -166,7 +168,8 @@ async def upload_drama(client: TelegramClient, chat_id: int,
             thumb=thumb_path,
             attributes=video_attributes,
             progress_callback=lambda c, t: upload_progress(c, t, status_msg, title, ep_info, start_time),
-            supports_streaming=True
+            supports_streaming=True,
+            reply_to=topic_id
         )
         
         try: await status_msg.delete()

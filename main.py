@@ -18,6 +18,7 @@ from api import (
 from downloader import download_all_episodes
 from merge import merge_episodes
 from uploader import upload_drama, sanitize_filename
+from database import init_db, is_drama_uploaded, add_uploaded_drama
 
 # Configuration (Use environment variables or replace these directly)
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -25,6 +26,11 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 AUTO_CHANNEL = int(os.environ.get("AUTO_CHANNEL", ADMIN_ID)) # Default post to admin
+AUTO_TOPIC = os.environ.get("AUTO_TOPIC")
+if AUTO_TOPIC and AUTO_TOPIC.isdigit():
+    AUTO_TOPIC = int(AUTO_TOPIC)
+else:
+    AUTO_TOPIC = None
 PROCESSED_FILE = "processed.json"
 
 # Initialize state
@@ -150,7 +156,7 @@ async def dl_callback(event):
     status_msg = await client.send_message(ADMIN_ID, f"⏳ Memulai download drama ID: `{book_id}`...")
     
     BotState.is_processing = True
-    success = await process_drama_full(book_id, AUTO_CHANNEL, status_msg)
+    success = await process_drama_full(book_id, AUTO_CHANNEL, status_msg, topic_id=AUTO_TOPIC)
     if success:
         processed_ids.add(book_id)
         save_processed(processed_ids)
@@ -201,13 +207,13 @@ async def on_download(event):
     status_msg = await event.reply(f"🎬 Drama: **{title}**\n📽 Total Episodes: {len(episodes)}\n\n⏳ Sedang memproses...")
     
     BotState.is_processing = True
-    success = await process_drama_full(book_id, chat_id, status_msg)
+    success = await process_drama_full(book_id, chat_id, status_msg, topic_id=AUTO_TOPIC if chat_id == AUTO_CHANNEL else None)
     if success:
         processed_ids.add(book_id)
         save_processed(processed_ids)
     BotState.is_processing = False
 
-async def process_drama_full(book_id, chat_id, status_msg=None):
+async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
     """Refactored logic to be reusable for auto-mode and support Melolo API."""
     # 1. Fetch data with retries
     max_api_retries = 3
@@ -228,6 +234,14 @@ async def process_drama_full(book_id, chat_id, status_msg=None):
         return False
 
     title = detail.get("title") or detail.get("book_name") or f"Drama_{book_id}"
+    
+    # DB Check for deduplication
+    if is_drama_uploaded(title):
+        msg = f"⏭ **{title}** sudah pernah di-upload (Database). Melewati..."
+        if status_msg: await status_msg.edit(msg)
+        logger.info(msg)
+        return True
+
     description = detail.get("intro") or "No description available."
     poster = detail.get("cover") or ""
     
@@ -264,10 +278,14 @@ async def process_drama_full(book_id, chat_id, status_msg=None):
             client, chat_id, 
             title, description, 
             poster, output_video_path,
-            ep_info=f"{success_count}/{total_count}"
+            ep_info=f"{success_count}/{total_count}",
+            topic_id=topic_id
         )
         
         if upload_success:
+            # Mark as uploaded in DB
+            add_uploaded_drama(title, book_id)
+            
             if status_msg: 
                 try: await status_msg.delete()
                 except: pass
@@ -335,7 +353,7 @@ async def auto_mode_loop():
                     
                     BotState.is_processing = True
                     # Process to target channel
-                    success = await process_drama_full(book_id, AUTO_CHANNEL)
+                    success = await process_drama_full(book_id, AUTO_CHANNEL, topic_id=AUTO_TOPIC)
                     BotState.is_processing = False
                     
                     if success:
@@ -375,6 +393,7 @@ async def auto_mode_loop():
 
 if __name__ == '__main__':
     logger.info("Initializing Dramabox Auto-Bot...")
+    init_db()
     
     with client:
         # Start auto loop and keep the client running

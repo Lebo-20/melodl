@@ -2,3 +2,4 @@ httpx
 telethon
 tqdm
 python-dotenv
+psycopg2-binary
