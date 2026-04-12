@@ -231,6 +231,9 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
         err_msg = f"❌ Detail atau Episode `{book_id}` tidak ditemukan."
         if status_msg: await status_msg.edit(err_msg)
         logger.error(err_msg)
+        # If we failed to get detail, we still try to record failure if possible
+        placeholder_title = f"Unknown_ID_{book_id}"
+        record_failure(placeholder_title)
         return False
 
     title = detail.get("title") or detail.get("book_name") or f"Drama_{book_id}"
@@ -355,6 +358,19 @@ async def auto_mode_loop():
                 if book_id not in processed_ids:
                     new_found += 1
                     title = drama.get("book_name") or drama.get("title") or "Unknown"
+                    
+                    # PRE-CHECK Failure limits to avoid any processing
+                    if is_drama_uploaded(title):
+                        logger.info(f"⏭ Skip {title} (Already uploaded)")
+                        processed_ids.add(book_id)
+                        continue
+                        
+                    fail_count = get_failure_count(title)
+                    if fail_count >= 2:
+                        logger.warning(f"🚫 Skip {title} (Failed {fail_count} times)")
+                        processed_ids.add(book_id) # Add to cache to avoid re-checking feed
+                        continue
+
                     logger.info(f"✨ [MELOLO] New drama: {title} ({book_id}). Starting process...")
                     
                     # Notify admin
