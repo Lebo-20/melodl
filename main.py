@@ -18,7 +18,7 @@ from api import (
 from downloader import download_all_episodes
 from merge import merge_episodes
 from uploader import upload_drama, sanitize_filename
-from database import init_db, is_drama_uploaded, add_uploaded_drama
+from database import init_db, is_drama_uploaded, add_uploaded_drama, record_failure, get_failure_count
 
 # Configuration (Use environment variables or replace these directly)
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -235,12 +235,19 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
 
     title = detail.get("title") or detail.get("book_name") or f"Drama_{book_id}"
     
-    # DB Check for deduplication
+    # DB Check for deduplication and failure limits
     if is_drama_uploaded(title):
-        msg = f"⏭ **{title}** sudah pernah di-upload (Database). Melewati..."
+        msg = f"⏭ **{title}** sudah pernah di-upload. Melewati..."
         if status_msg: await status_msg.edit(msg)
         logger.info(msg)
         return True
+        
+    fail_count = get_failure_count(title)
+    if fail_count >= 2:
+        msg = f"⏭ **{title}** gagal diproses sebanyak {fail_count} kali. Melewati..."
+        if status_msg: await status_msg.edit(msg)
+        logger.warning(msg)
+        return False
 
     description = detail.get("intro") or "No description available."
     poster = detail.get("cover") or ""
@@ -259,6 +266,7 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
             err_msg = f"❌ Download Gagal: **{title}** (Cek log untuk detail episode)"
             if status_msg: await status_msg.edit(err_msg)
             logger.error(err_msg)
+            record_failure(title)
             return False
 
         # 4. Merge
@@ -270,6 +278,7 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
             err_msg = f"❌ Merge Gagal (FFmpeg Error): **{title}**"
             if status_msg: await status_msg.edit(err_msg)
             logger.error(err_msg)
+            record_failure(title)
             return False
 
         # 5. Upload
@@ -294,11 +303,13 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
             err_msg = f"❌ Upload Gagal (Telegram Error): **{title}**"
             if status_msg: await status_msg.edit(err_msg)
             logger.error(err_msg)
+            record_failure(title)
             return False
             
     except Exception as e:
         logger.error(f"Error processing {book_id}: {e}")
         if status_msg: await status_msg.edit(f"❌ Error: {e}")
+        record_failure(title)
         return False
     finally:
         if os.path.exists(temp_dir):
