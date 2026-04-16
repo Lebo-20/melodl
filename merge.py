@@ -1,6 +1,7 @@
 import os
 import subprocess
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +11,7 @@ async def merge_episodes(video_dir: str, output_path: str):
     video_dir: Directory containing episode_.mp4 files.
     output_path: Path for final merged video.
     """
+    import asyncio
     try:
         # Get all video files in numeric order
         files = [f for f in os.listdir(video_dir) if f.endswith(".mp4")]
