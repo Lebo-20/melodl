@@ -55,7 +55,9 @@ logger = logging.getLogger(__name__)
 # Initialize Bot State
 class BotState:
     is_auto_running = True
-    is_processing = False
+    manual_tasks = 0 # Count of active manual commands
+    processing_ids = set() # Set for realtime duplicate detection
+    limit = asyncio.Semaphore(3) # Max 3 concurrent downloads total
 
 # Initialize client
 client = TelegramClient('dramabox_bot', API_ID, API_HASH)
@@ -148,19 +150,22 @@ async def dl_callback(event):
         return
     book_id = event.pattern_match.group(1).decode()
     
-    if BotState.is_processing:
-        await event.answer("⚠️ Bot sedang sibuk!", alert=True)
+    if BotState.limit.locked():
+        await event.answer("⚠️ Semua slot penuh (maks 3). Mohon tunggu sebentar!", alert=True)
         return
         
     await event.answer("Mulai memproses...")
     status_msg = await client.send_message(ADMIN_ID, f"⏳ Memulai download drama ID: `{book_id}`...")
     
-    BotState.is_processing = True
-    success = await process_drama_full(book_id, AUTO_CHANNEL, status_msg, topic_id=AUTO_TOPIC)
-    if success:
-        processed_ids.add(book_id)
-        save_processed(processed_ids)
-    BotState.is_processing = False
+    BotState.manual_tasks += 1
+    async with BotState.limit:
+        try:
+            success = await process_drama_full(book_id, AUTO_CHANNEL, status_msg, topic_id=AUTO_TOPIC)
+            if success:
+                processed_ids.add(book_id)
+                save_processed(processed_ids)
+        finally:
+            BotState.manual_tasks -= 1
 
 @client.on(events.NewMessage(pattern=r'/download (.+)'))
 async def on_download(event):
@@ -170,8 +175,8 @@ async def on_download(event):
         await event.reply("❌ Maaf, perintah ini hanya untuk admin.")
         return
         
-    if BotState.is_processing:
-        await event.reply("⚠️ Sedang memproses drama lain. Tunggu hingga selesai.")
+    if BotState.limit.locked():
+        await event.reply("⚠️ Semua slot penuh (maks 3). Antrian sedang memproses drama lain.")
         return
         
     query = event.pattern_match.group(1)
@@ -206,12 +211,15 @@ async def on_download(event):
     title = detail.get("title") or detail.get("book_name") or detail.get("name") or f"Drama_{book_id}"
     status_msg = await event.reply(f"🎬 Drama: **{title}**\n📽 Total Episodes: {len(episodes)}\n\n⏳ Sedang memproses...")
     
-    BotState.is_processing = True
-    success = await process_drama_full(book_id, chat_id, status_msg, topic_id=AUTO_TOPIC if chat_id == AUTO_CHANNEL else None)
-    if success:
-        processed_ids.add(book_id)
-        save_processed(processed_ids)
-    BotState.is_processing = False
+    BotState.manual_tasks += 1
+    async with BotState.limit:
+        try:
+            success = await process_drama_full(book_id, chat_id, status_msg, topic_id=AUTO_TOPIC if chat_id == AUTO_CHANNEL else None)
+            if success:
+                processed_ids.add(book_id)
+                save_processed(processed_ids)
+        finally:
+            BotState.manual_tasks -= 1
 
 async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
     """Refactored logic to be reusable for auto-mode and support Melolo API."""
@@ -238,8 +246,14 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
 
     title = detail.get("title") or detail.get("book_name") or f"Drama_{book_id}"
     
+    # Check realtime processing set
+    if book_id in BotState.processing_ids:
+        msg = f"⏳ **{title}** sedang diproses oleh worker lain..."
+        if status_msg: await status_msg.edit(msg)
+        return False
+        
     # DB Check for deduplication and failure limits
-    if is_drama_uploaded(title):
+    if is_drama_uploaded(title, book_id=book_id):
         msg = f"⏭ **{title}** sudah pernah di-upload. Melewati..."
         if status_msg: await status_msg.edit(msg)
         logger.info(msg)
@@ -260,6 +274,7 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
     video_dir = os.path.join(temp_dir, "episodes")
     os.makedirs(video_dir, exist_ok=True)
     
+    BotState.processing_ids.add(book_id)
     try:
         if status_msg: await status_msg.edit(f"🎬 Processing **{title}**...")
         
@@ -276,7 +291,7 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
         if status_msg: await status_msg.edit(f"📽 Merging {success_count}/{total_count} episodes...")
         safe_title = sanitize_filename(title)
         output_video_path = os.path.join(temp_dir, f"{safe_title}.mp4")
-        merge_success = merge_episodes(video_dir, output_video_path)
+        merge_success = await merge_episodes(video_dir, output_video_path)
         if not merge_success:
             err_msg = f"❌ Merge Gagal (FFmpeg Error): **{title}**"
             if status_msg: await status_msg.edit(err_msg)
@@ -315,6 +330,7 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
         record_failure(title)
         return False
     finally:
+        BotState.processing_ids.discard(book_id)
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
@@ -360,7 +376,10 @@ async def auto_mode_loop():
                     title = drama.get("book_name") or drama.get("title") or "Unknown"
                     
                     # PRE-CHECK Failure limits to avoid any processing
-                    if is_drama_uploaded(title):
+                    if book_id in BotState.processing_ids:
+                        continue
+                        
+                    if is_drama_uploaded(title, book_id=book_id):
                         logger.info(f"⏭ Skip {title} (Already uploaded)")
                         processed_ids.add(book_id)
                         continue
@@ -373,35 +392,43 @@ async def auto_mode_loop():
 
                     logger.info(f"✨ [MELOLO] New drama: {title} ({book_id}). Starting process...")
                     
-                    # Notify admin
-                    try:
-                        await client.send_message(ADMIN_ID, f"🆕 **Auto-System Mendeteksi Drama Baru!**\n🎬 `[MELOLO] {title}`\n🆔 `{book_id}`\n⏳ Memproses download & merge...")
-                    except: pass
-                    
-                    BotState.is_processing = True
-                    # Process to target channel
-                    success = await process_drama_full(book_id, AUTO_CHANNEL, topic_id=AUTO_TOPIC)
-                    BotState.is_processing = False
-                    
-                    if success:
-                        logger.info(f"✅ Finished {title}")
-                        processed_ids.add(book_id)
-                        save_processed(processed_ids)
+                    while BotState.manual_tasks > 0:
+                        await asyncio.sleep(5)
+                        
+                    if BotState.limit.locked():
+                        await asyncio.sleep(60) 
+                        continue
+                        
+                    async with BotState.limit:
+                        # Notify admin
                         try:
-                            await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post: **{title}** ke channel.")
+                            await client.send_message(ADMIN_ID, f"🆕 **Auto-System Mendeteksi Drama Baru!**\n🎬 `[MELOLO] {title}`\n🆔 `{book_id}`\n⏳ Memproses download & merge...")
                         except: pass
-                    else:
-                        logger.error(f"❌ Failed to process {title}")
-                        # Don't stop auto_running, just notify and move on
-                        try:
-                            await client.send_message(ADMIN_ID, f"🚨 **ERROR**: Auto-mode gagal memproses `{title}`.\nMelanjutkan ke drama berikutnya...")
-                        except: pass
-                        # Optional: remove from processed_ids if fail so it can be retried later?
-                        # But that might cause infinite error loops if it's a persistent error.
-                        # Maybe just keep it in processed_ids to avoid spamming.
-                    
-                    # Prevent hitting API/Telegram rate limits too hard
-                    await asyncio.sleep(10)
+                        
+                        # Process to target channel
+                        success = await process_drama_full(book_id, AUTO_CHANNEL, topic_id=AUTO_TOPIC)
+                        
+                        if success:
+                            logger.info(f"✅ Finished {title}")
+                            processed_ids.add(book_id)
+                            save_processed(processed_ids)
+                            try:
+                                await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post: **{title}** ke channel.\n⏳ Auto-mode istirahat selama 30 menit...")
+                            except: pass
+                            
+                            # Istirahat 30 menit setelah berhasil upload di auto mode
+                            for _ in range(30 * 60):
+                                if not BotState.is_auto_running:
+                                    break
+                                await asyncio.sleep(1)
+                        else:
+                            logger.error(f"❌ Failed to process {title}")
+                            # Don't stop auto_running, just notify and move on
+                            try:
+                                await client.send_message(ADMIN_ID, f"🚨 **ERROR**: Auto-mode gagal memproses `{title}`.\nMelanjutkan ke drama berikutnya...")
+                            except: pass
+                            # Prevent hitting API/Telegram rate limits too hard
+                            await asyncio.sleep(10)
             
             if new_found == 0:
                 logger.info("😴 No new dramas found in this scan.")

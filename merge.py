@@ -4,7 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def merge_episodes(video_dir: str, output_path: str):
+async def merge_episodes(video_dir: str, output_path: str):
     """
     Merges all .mp4 files in video_dir into a single output_path file.
     video_dir: Directory containing episode_.mp4 files.
@@ -22,37 +22,45 @@ def merge_episodes(video_dir: str, output_path: str):
         list_file_path = os.path.join(video_dir, "list.txt")
         with open(list_file_path, "w") as f:
             for file in files:
-                # Use absolute paths or handle relative properly
                 f.write(f"file '{file}'\n")
 
-        # Try fast merge first (-c copy)
-        command = [
+        # ffmpeg commands
+        fast_cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", list_file_path,
             "-c", "copy",
             output_path
         ]
         
-        logger.info(f"Running ffmpeg fast-merge: {' '.join(command)}")
-        process = subprocess.run(command, capture_output=True, text=True)
+        fallback_cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", list_file_path,
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            output_path
+        ]
+
+        logger.info(f"Running ffmpeg fast-merge non-blocking...")
+        process = await asyncio.create_subprocess_exec(
+            *fast_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await process.communicate()
         
         if process.returncode != 0:
-            logger.warning(f"Fast merge failed, attempting re-encoding fallback... Error: {process.stderr[:200]}")
-            # Fallback: Re-encode (slower but more robust for varying resolutions/codecs)
-            # We use -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" to ensure even dimensions for h264
-            fallback_command = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", list_file_path,
-                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k",
-                output_path
-            ]
+            logger.warning(f"Fast merge failed, error: {stderr.decode()[:200]}")
             logger.info("Running ffmpeg fallback-merge (re-encoding)...")
-            process = subprocess.run(fallback_command, capture_output=True, text=True)
+            process = await asyncio.create_subprocess_exec(
+                *fallback_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr = await process.communicate()
             
             if process.returncode != 0:
-                logger.error(f"Fallback merge also failed:\n{process.stderr}")
+                logger.error(f"Fallback merge failure: {stderr.decode()}")
                 return False
             
         logger.info(f"Successfully merged episodes into {output_path}")

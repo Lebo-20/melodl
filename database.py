@@ -36,14 +36,28 @@ def init_db():
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
 
-def is_drama_uploaded(title):
-    """Checks if a drama title has already been uploaded."""
+def is_drama_uploaded(title, book_id=None):
+    """Checks if a drama title or book_id has already been uploaded."""
     if not DATABASE_URL:
         return False
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        cur.execute("SELECT id FROM uploaded_dramas WHERE title = %s", (title,))
+        
+        # Normalize: Trim and lower case for robust comparison
+        normalized_title = title.strip().lower() if title else ""
+        
+        if book_id:
+            cur.execute(
+                "SELECT id FROM uploaded_dramas WHERE LOWER(TRIM(title)) = %s OR book_id = %s", 
+                (normalized_title, str(book_id))
+            )
+        else:
+            cur.execute(
+                "SELECT id FROM uploaded_dramas WHERE LOWER(TRIM(title)) = %s", 
+                (normalized_title,)
+            )
+            
         exists = cur.fetchone() is not None
         cur.close()
         conn.close()
