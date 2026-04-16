@@ -1,5 +1,6 @@
 import httpx
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -103,20 +104,85 @@ async def search_dramas(query: str):
             logger.error(f"Error searching for {query}: {e}")
             return []
 
-async def get_video_url(vid: str):
-    """Fetches the actual play URL for a video ID."""
+async def get_video_url(vid: str, episode_num: str = "Unknown"):
+    """
+    Fetches the actual play URL for a video ID with retries and advanced parsing.
+    """
     url = f"{BASE_URL}/video/{vid}"
     params = {
         "lang": "id",
         "code": AUTH_CODE
     }
+    
+    max_retries = 3
+    delays = [1, 2, 3]
+    
     async with httpx.AsyncClient(timeout=30) as client:
-        try:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            # Response: {"backup": "...", "url": "..."}
-            return data.get("url") or data.get("backup")
-        except Exception as e:
-            logger.error(f"Error fetching video URL for {vid}: {e}")
-            return None
+        for attempt in range(max_retries):
+            try:
+                response = await client.get(url, params=params)
+                
+                if response.status_code != 200:
+                    logger.error(f"API Error {response.status_code} for vid {vid} (Ep {episode_num}) - Attempt {attempt+1}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(delays[attempt])
+                        continue
+                    return None
+
+                data = response.json()
+                
+                # Debug logging if needed or if data is suspicious
+                if not data:
+                    logger.error(f"Empty response for vid {vid} (Ep {episode_num})")
+                    continue
+
+                # Advanced Parsing with Fallbacks
+                video_url = None
+                
+                # Check root or 'data' key
+                target = data.get("data") if isinstance(data.get("data"), dict) else data
+                
+                # Fallback sequence
+                video_url = (
+                    target.get("url") or 
+                    target.get("play_url") or 
+                    target.get("video_url") or 
+                    target.get("playUrl")
+                )
+                
+                # Check streams array or list array if still not found
+                if not video_url:
+                    # Check 'streams'
+                    if "streams" in target and isinstance(target["streams"], list) and len(target["streams"]) > 0:
+                        stream = target["streams"][0]
+                        if isinstance(stream, dict):
+                            video_url = stream.get("url") or stream.get("play_url")
+                    
+                    # Check 'list' (seen in some Melolo responses)
+                    if not video_url and "list" in target and isinstance(target["list"], list) and len(target["list"]) > 0:
+                        # Prefer 720p or highest if available, else first
+                        for item in target["list"]:
+                            if item.get("definition") == "720p":
+                                video_url = item.get("url")
+                                break
+                        if not video_url:
+                            video_url = target["list"][0].get("url")
+
+
+                if video_url:
+                    return video_url
+                
+                # If still no URL, log full response for debugging
+                logger.error(f"❌ No URL found in API response for vid {vid} (Episode {episode_num})")
+                logger.error(f"DEBUG - Full Response: {data}")
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delays[attempt])
+                
+            except Exception as e:
+                logger.error(f"Error fetching video URL for {vid} (Attempt {attempt+1}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delays[attempt])
+                    
+    return None
+

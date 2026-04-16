@@ -124,21 +124,29 @@ async def start(event):
 
 @client.on(events.NewMessage(pattern=r'/search (.+)'))
 async def on_search(event):
-    if event.chat_id != ADMIN_ID:
-        return
-    query = event.pattern_match.group(1)
+    query = event.pattern_match.group(1).strip()
     status_msg = await event.reply(f"🔍 Mencari `{query}`...")
     
+    # Check if query is an ID
+    if query.isdigit() and len(query) > 10:
+        detail = await get_drama_detail(query)
+        if detail:
+            title = detail.get("title") or detail.get("book_name") or f"Drama {query}"
+            buttons = [[Button.inline(f"🎬 {title} (ID: {query})", f"dl_{query}".encode())]]
+            await status_msg.edit(f"✅ ID ditemukan:", buttons=buttons)
+            return
+
     results = await search_dramas(query)
+
     if not results:
         await status_msg.edit(f"❌ Tidak ditemukan hasil untuk `{query}`.")
         return
         
     buttons = []
-    # Show top 5-10 results
+    # Show top 8 results
     for res in results[:8]:
         title = res.get("book_name") or res.get("title")
-        book_id = res.get("book_id") or res.get("id")
+        book_id = str(res.get("book_id") or res.get("id"))
         if title and book_id:
             buttons.append([Button.inline(f"🎬 {title}", f"dl_{book_id}".encode())])
             
@@ -146,21 +154,27 @@ async def on_search(event):
 
 @client.on(events.CallbackQuery(pattern=r'^dl_(.+)'))
 async def dl_callback(event):
-    if event.sender_id != ADMIN_ID:
-        return
     book_id = event.pattern_match.group(1).decode()
+    chat_id = event.chat_id
+
     
     if BotState.limit.locked():
         await event.answer("⚠️ Semua slot penuh (maks 3). Mohon tunggu sebentar!", alert=True)
         return
         
     await event.answer("Mulai memproses...")
-    status_msg = await client.send_message(ADMIN_ID, f"⏳ Memulai download drama ID: `{book_id}`...")
+    status_msg = await client.send_message(chat_id, f"⏳ Memulai download drama ID: `{book_id}`...")
     
     BotState.manual_tasks += 1
     async with BotState.limit:
         try:
-            success = await process_drama_full(book_id, AUTO_CHANNEL, status_msg, topic_id=AUTO_TOPIC)
+            # If it's the admin, they might want it in AUTO_CHANNEL, 
+            # but for simplicity let's use the chat where they requested it
+            # or keep AUTO_CHANNEL only for auto_mode.
+            target_chat = chat_id 
+            target_topic = AUTO_TOPIC if target_chat == AUTO_CHANNEL else None
+            
+            success = await process_drama_full(book_id, target_chat, status_msg, topic_id=target_topic)
             if success:
                 processed_ids.add(book_id)
                 save_processed(processed_ids)
@@ -171,15 +185,12 @@ async def dl_callback(event):
 async def on_download(event):
     chat_id = event.chat_id
     
-    if chat_id != ADMIN_ID:
-        await event.reply("❌ Maaf, perintah ini hanya untuk admin.")
-        return
-        
     if BotState.limit.locked():
         await event.reply("⚠️ Semua slot penuh (maks 3). Antrian sedang memproses drama lain.")
         return
         
-    query = event.pattern_match.group(1)
+    query = event.pattern_match.group(1).strip()
+
     book_id = None
     
     # Check if it looks like an ID (long numeric string)
@@ -214,7 +225,8 @@ async def on_download(event):
     BotState.manual_tasks += 1
     async with BotState.limit:
         try:
-            success = await process_drama_full(book_id, chat_id, status_msg, topic_id=AUTO_TOPIC if chat_id == AUTO_CHANNEL else None)
+            target_topic = AUTO_TOPIC if chat_id == AUTO_CHANNEL else None
+            success = await process_drama_full(book_id, chat_id, status_msg, topic_id=target_topic)
             if success:
                 processed_ids.add(book_id)
                 save_processed(processed_ids)
@@ -279,13 +291,20 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
         if status_msg: await status_msg.edit(f"🎬 Processing **{title}**...")
         
         # 3. Download
-        download_success, success_count, total_count = await download_all_episodes(episodes, video_dir)
-        if not download_success:
-            err_msg = f"❌ Download Gagal: **{title}** (Cek log untuk detail episode)"
+        is_fully_successful, success_count, total_count = await download_all_episodes(episodes, video_dir)
+        
+        if success_count == 0:
+            err_msg = f"❌ Download Gagal Total: **{title}** (0/{total_count} episode)"
             if status_msg: await status_msg.edit(err_msg)
             logger.error(err_msg)
             record_failure(title)
             return False
+            
+        if not is_fully_successful:
+            warn_msg = f"⚠️ Download Parsial: **{title}** ({success_count}/{total_count} episode berhasil)"
+            logger.warning(warn_msg)
+            # We continue to merge even if partial, as requested by user "Jangan batalkan semua"
+
 
         # 4. Merge
         if status_msg: await status_msg.edit(f"📽 Merging {success_count}/{total_count} episodes...")
@@ -413,14 +432,16 @@ async def auto_mode_loop():
                             processed_ids.add(book_id)
                             save_processed(processed_ids)
                             try:
-                                await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post: **{title}** ke channel.\n⏳ Auto-mode istirahat selama 30 menit...")
+                                await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post: **{title}** ke channel.\n⏳ Auto-mode istirahat selama 10 menit...")
                             except: pass
+
                             
-                            # Istirahat 30 menit setelah berhasil upload di auto mode
-                            for _ in range(30 * 60):
+                            # Istirahat 10 menit setelah berhasil upload di auto mode
+                            for _ in range(10 * 60):
                                 if not BotState.is_auto_running:
                                     break
                                 await asyncio.sleep(1)
+
                         else:
                             logger.error(f"❌ Failed to process {title}")
                             # Don't stop auto_running, just notify and move on
