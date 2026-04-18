@@ -120,7 +120,7 @@ async def panel_callback(event):
         else:
             logger.error(f"Callback error: {e}")
 
-@client.on(events.NewMessage(pattern='/start'))
+@client.on(events.NewMessage(pattern=r'/(melolo\s+)?start'))
 async def start(event):
     if event.sender_id not in ADMIN_IDS:
         return
