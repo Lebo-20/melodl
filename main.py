@@ -455,12 +455,12 @@ async def auto_mode_loop():
                             processed_ids.add(book_id)
                             save_processed(processed_ids)
                             try:
-                                await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post: **{title}** ke channel.\n⏳ Auto-mode istirahat selama 10 menit...")
+                                await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post: **{title}** ke channel.\n⏳ Auto-mode istirahat selama 30 menit...")
                             except: pass
 
                             
-                            # Istirahat 10 menit setelah berhasil upload di auto mode
-                            for _ in range(10 * 60):
+                            # Istirahat 30 menit setelah berhasil upload di auto mode
+                            for _ in range(30 * 60):
                                 if not BotState.is_auto_running:
                                     break
                                 await asyncio.sleep(1)
