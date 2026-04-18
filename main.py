@@ -20,12 +20,16 @@ from merge import merge_episodes
 from uploader import upload_drama, sanitize_filename
 from database import init_db, is_drama_uploaded, add_uploaded_drama, record_failure, get_failure_count
 
-# Configuration (Use environment variables or replace these directly)
+# Configuration
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
-AUTO_CHANNEL = int(os.environ.get("AUTO_CHANNEL", ADMIN_ID)) # Default post to admin
+# Multi-admin support
+ADMIN_IDS = [6337959812, 5888747846]
+# For single-id compatibility in some places, use the first one
+PRIMARY_ADMIN = ADMIN_IDS[0]
+
+AUTO_CHANNEL = int(os.environ.get("AUTO_CHANNEL", PRIMARY_ADMIN)) 
 AUTO_TOPIC = os.environ.get("AUTO_TOPIC")
 if AUTO_TOPIC and AUTO_TOPIC.isdigit():
     AUTO_TOPIC = int(AUTO_TOPIC)
@@ -69,9 +73,9 @@ def get_panel_buttons():
         [Button.inline(f"📊 Status: {status_text}", b"status")]
     ]
 
-@client.on(events.NewMessage(pattern='/update'))
+@client.on(events.NewMessage(pattern=r'/melolo update'))
 async def update_bot(event):
-    if event.sender_id != ADMIN_ID:
+    if event.sender_id not in ADMIN_IDS:
         return
     import subprocess
     import sys
@@ -87,15 +91,15 @@ async def update_bot(event):
     except Exception as e:
         await status_msg.edit(f"❌ Gagal melakukan update: {e}")
 
-@client.on(events.NewMessage(pattern='/panel'))
+@client.on(events.NewMessage(pattern=r'/melolo panel'))
 async def panel(event):
-    if event.chat_id != ADMIN_ID:
+    if event.sender_id not in ADMIN_IDS:
         return
     await event.reply("🎛 **Dramabox Control Panel**", buttons=get_panel_buttons())
 
 @client.on(events.CallbackQuery())
 async def panel_callback(event):
-    if event.sender_id != ADMIN_ID:
+    if event.sender_id not in ADMIN_IDS:
         return
         
     data = event.data
@@ -109,21 +113,53 @@ async def panel_callback(event):
             BotState.is_auto_running = False
             await event.answer("Auto-mode stopped!")
             await event.edit("🎛 **Dramabox Control Panel**", buttons=get_panel_buttons())
-        elif data == b"status":
-            await event.answer(f"Status: {'Running' if BotState.is_auto_running else 'Stopped'}")
-            await event.edit("🎛 **Dramabox Control Panel**", buttons=get_panel_buttons())
     except Exception as e:
         if "message is not modified" in str(e).lower() or "Message string and reply markup" in str(e):
-            pass # Ignore if button is already in that state
+            pass 
         else:
             logger.error(f"Callback error: {e}")
 
 @client.on(events.NewMessage(pattern='/start'))
 async def start(event):
-    await event.reply("Welcome to Dramabox Downloader Bot! 🎉\n\nGunakan perintah\n`/download {bookId}`\n`/download {title}`\n`/search {judul}`\nuntuk mulai.")
+    if event.sender_id not in ADMIN_IDS:
+        return
+    menu = (
+        "📋 **Dramabox Bot Menu**\n\n"
+        "• `/melolo cari {judul}` — Cari drama by judul\n"
+        "• `/melolo download {ID}` — Download by ID\n"
+        "• `/melolo status` — Cek proses aktif\n"
+        "• `/melolo panel` — Control panel\n"
+        "• `/melolo update` — Update dari Git\n\n"
+        "⚡ **Prioritas Manual Aktif**"
+    )
+    await event.reply(menu)
 
-@client.on(events.NewMessage(pattern=r'/search (.+)'))
+@client.on(events.NewMessage(pattern=r'/melolo status'))
+async def status_check(event):
+    if event.sender_id not in ADMIN_IDS:
+        return
+    
+    auto_status = "🟢 RUNNING" if BotState.is_auto_running else "🔴 STOPPED"
+    active_manual = BotState.manual_tasks
+    processing = len(BotState.processing_ids)
+    
+    text = (
+        "📊 **Bot Status Report**\n\n"
+        f"🤖 Auto-Mode: {auto_status}\n"
+        f"⏳ Active Manual Tasks: `{active_manual}`\n"
+        f"🎬 Real-time Processing: `{processing}`\n"
+        f"🚦 Slots: `{BotState.limit._value}/3` available"
+    )
+    
+    if BotState.processing_ids:
+        text += "\n\n**Processing IDs:**\n" + "\n".join([f"• `{i}`" for i in BotState.processing_ids])
+        
+    await event.reply(text)
+
+@client.on(events.NewMessage(pattern=r'/melolo cari (.+)'))
 async def on_search(event):
+    if event.sender_id not in ADMIN_IDS:
+        return
     query = event.pattern_match.group(1).strip()
     status_msg = await event.reply(f"🔍 Mencari `{query}`...")
     
@@ -181,8 +217,10 @@ async def dl_callback(event):
         finally:
             BotState.manual_tasks -= 1
 
-@client.on(events.NewMessage(pattern=r'/download (.+)'))
+@client.on(events.NewMessage(pattern=r'/melolo download (.+)'))
 async def on_download(event):
+    if event.sender_id not in ADMIN_IDS:
+        return
     chat_id = event.chat_id
     
     if BotState.limit.locked():
@@ -442,10 +480,11 @@ async def auto_mode_loop():
                         continue
                         
                     async with BotState.limit:
-                        # Notify admin
-                        try:
-                            await client.send_message(ADMIN_ID, f"🆕 **Auto-System Mendeteksi Drama Baru!**\n🎬 `[MELOLO] {title}`\n🆔 `{book_id}`\n⏳ Memproses download & merge...")
-                        except: pass
+                        # Notify admins
+                        for admin_id in ADMIN_IDS:
+                            try:
+                                await client.send_message(admin_id, f"🆕 **Auto-System Mendeteksi Drama Baru!**\n🎬 `[MELOLO] {title}`\n🆔 `{book_id}`\n⏳ Memproses download & merge...")
+                            except: pass
                         
                         # Process to target channel
                         success = await process_drama_full(book_id, AUTO_CHANNEL, topic_id=AUTO_TOPIC)
@@ -454,9 +493,10 @@ async def auto_mode_loop():
                             logger.info(f"✅ Finished {title}")
                             processed_ids.add(book_id)
                             save_processed(processed_ids)
-                            try:
-                                await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post: **{title}** ke channel.\n⏳ Auto-mode istirahat selama 30 menit...")
-                            except: pass
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await client.send_message(admin_id, f"✅ Sukses Auto-Post: **{title}** ke channel.\n⏳ Auto-mode istirahat selama 30 menit...")
+                                except: pass
 
                             
                             # Istirahat 30 menit setelah berhasil upload di auto mode
@@ -468,9 +508,10 @@ async def auto_mode_loop():
                         else:
                             logger.error(f"❌ Failed to process {title}")
                             # Don't stop auto_running, just notify and move on
-                            try:
-                                await client.send_message(ADMIN_ID, f"🚨 **ERROR**: Auto-mode gagal memproses `{title}`.\nMelanjutkan ke drama berikutnya...")
-                            except: pass
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await client.send_message(admin_id, f"🚨 **ERROR**: Auto-mode gagal memproses `{title}`.\nMelanjutkan ke drama berikutnya...")
+                                except: pass
                             # Prevent hitting API/Telegram rate limits too hard
                             await asyncio.sleep(10)
             
