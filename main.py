@@ -219,7 +219,15 @@ async def on_download(event):
         await event.reply(f"❌ Drama `{book_id}` tidak memiliki episode.")
         return
     
-    title = detail.get("title") or detail.get("book_name") or detail.get("name") or f"Drama_{book_id}"
+    title = (
+        detail.get("title") or 
+        detail.get("book_name") or 
+        detail.get("name") or 
+        detail.get("bookName") or 
+        (detail.get("data", {}) if isinstance(detail.get("data"), dict) else {}).get("name") or
+        (detail.get("data", {}) if isinstance(detail.get("data"), dict) else {}).get("title") or
+        f"Drama_{book_id}"
+    )
     status_msg = await event.reply(f"🎬 Drama: **{title}**\n📽 Total Episodes: {len(episodes)}\n\n⏳ Sedang memproses...")
     
     BotState.manual_tasks += 1
@@ -256,7 +264,15 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
         record_failure(placeholder_title)
         return False
 
-    title = detail.get("title") or detail.get("book_name") or f"Drama_{book_id}"
+    title = (
+        detail.get("title") or 
+        detail.get("book_name") or 
+        detail.get("name") or 
+        detail.get("bookName") or 
+        (detail.get("data", {}) if isinstance(detail.get("data"), dict) else {}).get("name") or
+        (detail.get("data", {}) if isinstance(detail.get("data"), dict) else {}).get("title") or
+        f"Drama_{book_id}"
+    )
     
     # Check realtime processing set
     if book_id in BotState.processing_ids:
@@ -393,7 +409,13 @@ async def auto_mode_loop():
                     
                 if book_id not in processed_ids:
                     new_found += 1
-                    title = drama.get("book_name") or drama.get("title") or "Unknown"
+                    title = (
+                        drama.get("book_name") or 
+                        drama.get("title") or 
+                        drama.get("name") or 
+                        drama.get("bookName") or 
+                        "Unknown"
+                    )
                     
                     # PRE-CHECK Failure limits to avoid any processing
                     if book_id in BotState.processing_ids:
