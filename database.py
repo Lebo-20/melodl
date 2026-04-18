@@ -110,18 +110,18 @@ def record_failure(title):
         logger.error(f"Failed to record failure for {title}: {e}")
         return False
 
-def get_failure_count(title):
-    """Returns the number of times a drama title has failed."""
+def get_last_failure_info(title):
+    """Returns (failure_count, last_attempt_timestamp) for a drama title."""
     if not DATABASE_URL:
-        return 0
+        return 0, None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        cur.execute("SELECT failure_count FROM drama_failures WHERE title = %s", (title,))
+        cur.execute("SELECT failure_count, last_attempt FROM drama_failures WHERE title = %s", (title,))
         row = cur.fetchone()
         cur.close()
         conn.close()
-        return row[0] if row else 0
+        return (row[0], row[1]) if row else (0, None)
     except Exception as e:
-        logger.error(f"Failed to get failure count for {title}: {e}")
-        return 0
+        logger.error(f"Failed to get failure info for {title}: {e}")
+        return 0, None

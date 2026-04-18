@@ -18,7 +18,8 @@ from api import (
 from downloader import download_all_episodes
 from merge import merge_episodes
 from uploader import upload_drama, sanitize_filename
-from database import init_db, is_drama_uploaded, add_uploaded_drama, record_failure, get_failure_count
+from database import init_db, is_drama_uploaded, add_uploaded_drama, record_failure, get_last_failure_info
+from datetime import datetime, timedelta, timezone
 
 # Configuration
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -325,12 +326,17 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
         logger.info(msg)
         return True
         
-    fail_count = get_failure_count(title)
+    fail_count, last_attempt = get_last_failure_info(title)
     if fail_count >= 2:
-        msg = f"⏭ **{title}** gagal diproses sebanyak {fail_count} kali. Melewati..."
-        if status_msg: await status_msg.edit(msg)
-        logger.warning(msg)
-        return False
+        if last_attempt:
+            # Check if 24 hours have passed since last failure
+            if datetime.now(timezone.utc) - last_attempt.replace(tzinfo=timezone.utc) < timedelta(days=1):
+                msg = f"⏭ **{title}** gagal sebanyak {fail_count} kali. Cooldown 24 jam aktif. Melewati..."
+                if status_msg: await status_msg.edit(msg)
+                logger.warning(msg)
+                return False
+            else:
+                logger.info(f"🔄 **{title}** mencoba ulang setelah cooldown 24 jam.")
 
     description = detail.get("intro") or "No description available."
     poster = detail.get("cover") or ""
@@ -464,11 +470,12 @@ async def auto_mode_loop():
                         processed_ids.add(book_id)
                         continue
                         
-                    fail_count = get_failure_count(title)
+                    fail_count, last_attempt = get_last_failure_info(title)
                     if fail_count >= 2:
-                        logger.warning(f"🚫 Skip {title} (Failed {fail_count} times)")
-                        processed_ids.add(book_id) # Add to cache to avoid re-checking feed
-                        continue
+                        if last_attempt and datetime.now(timezone.utc) - last_attempt.replace(tzinfo=timezone.utc) < timedelta(days=1):
+                            logger.warning(f"🚫 Skip {title} (Failed {fail_count} times, Cooldown 24h)")
+                            processed_ids.add(book_id) 
+                            continue
 
                     logger.info(f"✨ [MELOLO] New drama: {title} ({book_id}). Starting process...")
                     
