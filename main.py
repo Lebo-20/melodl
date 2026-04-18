@@ -366,9 +366,11 @@ async def process_drama_full(book_id, chat_id, status_msg=None, topic_id=None):
             return False
             
         if not is_fully_successful:
-            warn_msg = f"⚠️ Download Parsial: **{title}** ({success_count}/{total_count} episode berhasil)"
-            logger.warning(warn_msg)
-            # We continue to merge even if partial, as requested by user "Jangan batalkan semua"
+            err_msg = f"❌ Download Incomplete: **{title}** ({success_count}/{total_count} episode berhasil). Aborting merge & upload."
+            if status_msg: await status_msg.edit(err_msg)
+            logger.error(err_msg)
+            record_failure(title)
+            return False
 
 
         # 4. Merge
