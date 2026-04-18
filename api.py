@@ -137,8 +137,8 @@ async def get_video_url(vid: str, episode_num: str = "1"):
         "lang": "id"
     }
     
-    max_retries = 3
-    delays = [1, 2, 3]
+    max_retries = 5
+    delays = [2, 5, 10, 20, 30]
     
     async with httpx.AsyncClient(timeout=30) as client:
         for attempt in range(max_retries):
@@ -146,18 +146,27 @@ async def get_video_url(vid: str, episode_num: str = "1"):
                 response = await client.get(url, params=params)
                 
                 if response.status_code != 200:
-                    logger.error(f"API Error {response.status_code} for vid {vid} (Ep {episode_num}) - Attempt {attempt+1}")
+                    logger.warning(f"⚠️ API Status {response.status_code} untuk {vid} (Ep {episode_num}) - Percobaan {attempt+1}/{max_retries}")
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(delays[attempt])
+                        wait = delays[attempt]
+                        logger.info(f"🔄 Mencoba ulang dalam {wait} detik...")
+                        await asyncio.sleep(wait)
                         continue
                     return None
 
                 data = response.json()
                 
-                # Debug logging if needed or if data is suspicious
-                if not data:
-                    logger.error(f"Empty response for vid {vid} (Ep {episode_num})")
-                    continue
+                # Check for internal API errors (even if HTTP status is 200)
+                json_code = data.get("code")
+                if json_code not in [0, 200, "0", "200"] or not data:
+                    msg = data.get("msg") or "Empty response"
+                    logger.warning(f"⚠️ API Internal Error {json_code} ({msg}) untuk {vid} (Ep {episode_num}) - Percobaan {attempt+1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        wait = delays[attempt]
+                        logger.info(f"🔄 Mencoba ulang dalam {wait} detik...")
+                        await asyncio.sleep(wait)
+                        continue
+                    return None
 
                 # Advanced Parsing with Fallbacks
                 video_url = None
