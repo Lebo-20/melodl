@@ -61,8 +61,9 @@ logger = logging.getLogger(__name__)
 class BotState:
     is_auto_running = True
     manual_tasks = 0 # Count of active manual commands
-    processing_ids = set() # Set for realtime duplicate detection
-    limit = asyncio.Semaphore(3) # Max 3 concurrent downloads total
+    processing_ids = set() 
+    limit = asyncio.Semaphore(3)
+    search_cache = {} # chat_id: {"results": [...], "query": "..."}
 
 # Initialize client
 client = TelegramClient('dramabox_bot', API_ID, API_HASH)
@@ -179,20 +180,56 @@ async def on_search(event):
         await status_msg.edit(f"❌ Tidak ditemukan hasil untuk `{query}`.")
         return
         
-    buttons = []
-    # Show top 8 results
-    for res in results[:8]:
-        # Support multiple title keys
+    results_list = []
+    for res in results:
         title = res.get("book_name") or res.get("title") or res.get("name") or res.get("bookName")
         book_id = str(res.get("book_id") or res.get("id"))
         if title and book_id:
-            buttons.append([Button.inline(f"🎬 {title}", f"dl_{book_id}".encode())])
+            results_list.append({"title": title, "book_id": book_id})
 
-    if not buttons:
+    if not results_list:
         await status_msg.edit(f"❌ Tidak ditemukan hasil valid untuk `{query}`.")
         return
-            
-    await status_msg.edit(f"✅ Ditemukan {len(results)} drama untuk `{query}`:", buttons=buttons)
+        
+    BotState.search_cache[event.chat_id] = {"results": results_list, "query": query}
+    await show_search_page(event.chat_id, status_msg, 0)
+
+async def show_search_page(chat_id, msg, page):
+    cache = BotState.search_cache.get(chat_id)
+    if not cache:
+        return
+        
+    results = cache["results"]
+    query = cache["query"]
+    PAGE_SIZE = 5 
+    
+    start_idx = page * PAGE_SIZE
+    end_idx = start_idx + PAGE_SIZE
+    current_page_results = results[start_idx:end_idx]
+    
+    buttons = []
+    for res in current_page_results:
+        buttons.append([Button.inline(f"🎬 {res['title']}", f"dl_{res['book_id']}".encode())])
+        
+    # Pagination buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(Button.inline("⏪ Back", f"shpage_{page-1}".encode()))
+    if end_idx < len(results):
+        nav_buttons.append(Button.inline("Next ⏩", f"shpage_{page+1}".encode()))
+        
+    if nav_buttons:
+        buttons.append(nav_buttons)
+        
+    page_text = f"✅ Ditemukan {len(results)} drama untuk `{query}` (Hal {page+1}):"
+    await msg.edit(page_text, buttons=buttons)
+
+@client.on(events.CallbackQuery(pattern=r'^shpage_(\d+)'))
+async def on_shpage(event):
+    if event.sender_id not in ADMIN_IDS:
+        return
+    page = int(event.pattern_match.group(1))
+    await show_search_page(event.chat_id, event, page)
 
 @client.on(events.CallbackQuery(pattern=r'^dl_(.+)'))
 async def dl_callback(event):
