@@ -182,10 +182,15 @@ async def on_search(event):
     buttons = []
     # Show top 8 results
     for res in results[:8]:
-        title = res.get("book_name") or res.get("title")
+        # Support multiple title keys
+        title = res.get("book_name") or res.get("title") or res.get("name") or res.get("bookName")
         book_id = str(res.get("book_id") or res.get("id"))
         if title and book_id:
             buttons.append([Button.inline(f"🎬 {title}", f"dl_{book_id}".encode())])
+
+    if not buttons:
+        await status_msg.edit(f"❌ Tidak ditemukan hasil valid untuk `{query}`.")
+        return
             
     await status_msg.edit(f"✅ Ditemukan {len(results)} drama untuk `{query}`:", buttons=buttons)
 
