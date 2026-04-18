@@ -66,7 +66,7 @@ async def download_file(client: httpx.AsyncClient, url: str, path: str, progress
 
 from api import get_video_url
 
-async def download_all_episodes(episodes, download_dir: str, semaphore_count: int = 5):
+async def download_all_episodes(episodes, download_dir: str, book_id: str = None, semaphore_count: int = 5):
     """
     Downloads all episodes concurrently.
     episodes: list of dicts with 'episode' and 'vid' for Melolo API
@@ -81,17 +81,19 @@ async def download_all_episodes(episodes, download_dir: str, semaphore_count: in
             filename = f"episode_{ep_num}.mp4"
             filepath = os.path.join(download_dir, filename)
             
-            vid = ep.get('vid')
-            if not vid:
-                logger.error(f"No Video ID found for episode {ep_num}")
+            # Use book_id if available (New API), otherwise fallback to vid
+            target_id = book_id or ep.get('vid')
+            
+            if not target_id:
+                logger.error(f"No ID found for episode {ep_num}")
                 failed_episodes.append(ep_num)
                 return False
                 
             max_retries = 2 # get_video_url already has 3 retries
             for attempt in range(max_retries):
                 try:
-                    # Fetch URL from vid (fresh URL for each attempt)
-                    url = await get_video_url(vid, ep_num)
+                    # Fetch URL (fresh URL for each attempt)
+                    url = await get_video_url(target_id, ep_num)
                     if not url:
                         # Already logged in api.py
                         if attempt < max_retries - 1:
