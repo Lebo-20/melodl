@@ -170,13 +170,24 @@ async def get_video_url(vid: str, episode_num: str = "1"):
                     target.get("url") or 
                     target.get("play_url") or 
                     target.get("video_url") or 
-                    target.get("playUrl")
+                    target.get("playUrl") or
+                    target.get("videoUrl")
                 )
                 
-                # Check streams array or list array if still not found
+                # Check streams array, qualityList, or list array if still not found
                 if not video_url:
+                    # Check 'qualityList' (New Melolo format)
+                    if "qualityList" in target and isinstance(target["qualityList"], list) and len(target["qualityList"]) > 0:
+                        # Prefer 720p or highest if available, else first
+                        for item in target["qualityList"]:
+                            if item.get("definition") == "720p":
+                                video_url = item.get("url")
+                                break
+                        if not video_url:
+                            video_url = target["qualityList"][0].get("url")
+
                     # Check 'streams'
-                    if "streams" in target and isinstance(target["streams"], list) and len(target["streams"]) > 0:
+                    if not video_url and "streams" in target and isinstance(target["streams"], list) and len(target["streams"]) > 0:
                         stream = target["streams"][0]
                         if isinstance(stream, dict):
                             video_url = stream.get("url") or stream.get("play_url")
