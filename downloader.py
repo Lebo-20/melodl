@@ -19,9 +19,11 @@ async def download_aria2c(url: str, path: str):
     cmd = [
         "aria2c",
         "--console-log-level=error",
-        "-x", "16",       # 16 connections per server
-        "-s", "16",       # 16 connections
-        "-k", "1M",       # 1MB chunks
+        "--user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"",
+        "--referer=\"https://melolo.dramabos.my.id/\"",
+        "-x", "16",
+        "-s", "16",
+        "-k", "1M",
         "--summary-interval=0",
         "--auto-file-renaming=false",
         "--allow-overwrite=true",
@@ -44,8 +46,12 @@ async def download_aria2c(url: str, path: str):
 
 async def download_file(client: httpx.AsyncClient, url: str, path: str, progress_callback=None):
     """Downloads a single file with potential progress tracking."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://melolo.dramabos.my.id/"
+    }
     try:
-        async with client.stream("GET", url) as response:
+        async with client.stream("GET", url, headers=headers) as response:
             response.raise_for_status()
             
             total_size = int(response.headers.get("Content-Length", 0))
