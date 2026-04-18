@@ -31,22 +31,27 @@ async def get_latest_dramas(pages=1, offset=None):
                 response = await client.get(url, params=params)
                 if response.status_code == 200:
                     data = response.json()
-                    # Melolo structure: data.cell.cell_data -> list of sections -> each has 'books'
-                    cell_data = data.get("data", {}).get("cell", {}).get("cell_data", [])
-                    if not cell_data:
-                        break
                     
                     found_in_page = []
-                    for section in cell_data:
-                        books = section.get("books", [])
-                        found_in_page.extend(books)
                     
+                    # Logic 1: New simple structure (data is a list or contains a list in 'data')
+                    payload = data.get("data", [])
+                    if isinstance(payload, list):
+                        found_in_page = payload
+                    elif isinstance(payload, dict):
+                        # Logic 2: Old complex structure (data.cell.cell_data)
+                        cell_data = payload.get("cell", {}).get("cell_data", [])
+                        if cell_data:
+                            for section in cell_data:
+                                books = section.get("books", [])
+                                found_in_page.extend(books)
+                                
                     if not found_in_page:
                         break
                         
                     all_dramas.extend(found_in_page)
                     # Use next_offset from response if available, but limit to 0-5 range for Melolo
-                    next_val = data.get("data", {}).get("next_offset")
+                    next_val = data.get("data", {} if isinstance(payload, dict) else {}).get("next_offset") if isinstance(payload, dict) else None
                     if next_val is not None:
                         current_offset = int(next_val) % 6
                     else:
