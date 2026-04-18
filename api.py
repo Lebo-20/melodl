@@ -7,9 +7,17 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://melolo.dramabos.my.id/api"
 AUTH_CODE = "A8D6AB170F7B89F2182561D3B32F390D"
 
-async def get_latest_dramas(pages=1, offset=0):
+async def get_latest_dramas(pages=1, offset=None):
     """Fetches trending dramas from Melolo API home section."""
     all_dramas = []
+    
+    # Internal counter for rotation if offset is not specifically provided
+    if offset is None:
+        if not hasattr(get_latest_dramas, "_rotation_index"):
+            get_latest_dramas._rotation_index = 0
+        offset = get_latest_dramas._rotation_index
+        # Rotate for next call
+        get_latest_dramas._rotation_index = (get_latest_dramas._rotation_index + 1) % 6
     
     async with httpx.AsyncClient(timeout=30) as client:
         current_offset = offset
@@ -37,8 +45,12 @@ async def get_latest_dramas(pages=1, offset=0):
                         break
                         
                     all_dramas.extend(found_in_page)
-                    # Use next_offset from response if available
-                    current_offset = data.get("data", {}).get("next_offset", current_offset + 18)
+                    # Use next_offset from response if available, but limit to 0-5 range for Melolo
+                    next_val = data.get("data", {}).get("next_offset")
+                    if next_val is not None:
+                        current_offset = int(next_val) % 6
+                    else:
+                        current_offset = (current_offset + 1) % 6
                 else:
                     break
             except Exception as e:
@@ -104,14 +116,20 @@ async def search_dramas(query: str):
             logger.error(f"Error searching for {query}: {e}")
             return []
 
-async def get_video_url(vid: str, episode_num: str = "Unknown"):
+async def get_video_url(vid: str, episode_num: str = "1"):
     """
-    Fetches the actual play URL for a video ID with retries and advanced parsing.
+    Fetches the actual play URL for a video ID.
+    New API use query params: ?id={vid}&ep={ep}&code={token}
     """
-    url = f"{BASE_URL}/video/{vid}"
+    # Sanitize episode number (convert 001 to 1)
+    clean_ep = str(int(episode_num)) if episode_num.isdigit() else episode_num
+    
+    url = f"{BASE_URL}/video"
     params = {
-        "lang": "id",
-        "code": AUTH_CODE
+        "id": vid,
+        "ep": clean_ep,
+        "code": AUTH_CODE,
+        "lang": "id"
     }
     
     max_retries = 3

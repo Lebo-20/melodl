@@ -376,8 +376,9 @@ async def auto_mode_loop():
             
             if not queue and not is_initial_run:
                 # Try a different offset if nothing new found in first page
-                logger.info("ℹ️ No new dramas in first page. Trying offset 18...")
-                new_dramas = await get_latest_dramas(pages=1, offset=18) or []
+                logger.info("ℹ️ No new dramas in first page. Rotating offset...")
+                # Calling with offset=None triggers internal rotation in api.py
+                new_dramas = await get_latest_dramas(pages=1, offset=None) or []
                 queue = [d for d in new_dramas if str(d.get("book_id") or d.get("id")) not in processed_ids]
             
             new_found = 0
