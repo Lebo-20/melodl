@@ -20,7 +20,7 @@ async def download_aria2c(url: str, path: str):
         "aria2c",
         "--console-log-level=error",
         "--user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"",
-        "--referer=\"https://melolo.dramabos.my.id/\"",
+        "--referer=\"https://melolo.dramabos.online/\"",
         "-x", "16",
         "-s", "16",
         "-k", "1M",
@@ -48,7 +48,7 @@ async def download_file(client: httpx.AsyncClient, url: str, path: str, progress
     """Downloads a single file with potential progress tracking."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://melolo.dramabos.my.id/"
+        "Referer": "https://melolo.dramabos.online/"
     }
     try:
         async with client.stream("GET", url, headers=headers) as response:
