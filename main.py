@@ -63,7 +63,7 @@ class BotState:
     manual_tasks = 0 # Count of active manual commands
     processing_ids = set() 
     limit = asyncio.Semaphore(3)
-    search_cache = {} # chat_id: {"results": [...], "query": "..."}
+    search_cache = {} # chat_id: {"results": [...], "query": "...", "last_page": 0}
 
 # Initialize client
 client = TelegramClient('dramabox_bot', API_ID, API_HASH)
@@ -198,6 +198,8 @@ async def show_search_page(chat_id, msg, page):
     cache = BotState.search_cache.get(chat_id)
     if not cache:
         return
+    
+    cache["last_page"] = page
         
     results = cache["results"]
     query = cache["query"]
@@ -222,41 +224,80 @@ async def show_search_page(chat_id, msg, page):
         buttons.append(nav_buttons)
         
     page_text = f"✅ Ditemukan {len(results)} drama untuk `{query}` (Hal {page+1}):"
-    await msg.edit(page_text, buttons=buttons)
+    await msg.edit(page_text, buttons=buttons, link_preview=False)
 
-@client.on(events.CallbackQuery(pattern=r'^shpage_(\d+)'))
+@client.on(events.CallbackQuery(pattern=r'^shpage_(.+)'))
 async def on_shpage(event):
     if event.sender_id not in ADMIN_IDS:
         return
-    page = int(event.pattern_match.group(1))
+    
+    data = event.pattern_match.group(1).decode()
+    if data == "back":
+        cache = BotState.search_cache.get(event.chat_id)
+        page = cache.get("last_page", 0) if cache else 0
+    else:
+        page = int(data)
+        
     await show_search_page(event.chat_id, event, page)
 
 @client.on(events.CallbackQuery(pattern=r'^dl_(.+)'))
-async def dl_callback(event):
+async def on_info(event):
+    if event.sender_id not in ADMIN_IDS:
+        return
+    book_id = event.pattern_match.group(1).decode()
+    
+    await event.answer("Mengambil detail drama...")
+    
+    detail_raw = await get_drama_detail(book_id)
+    if not detail_raw:
+        await event.answer("❌ Gagal mengambil detail drama.", alert=True)
+        return
+        
+    data = detail_raw.get("data") if detail_raw.get("data") else detail_raw
+    title = data.get("title") or data.get("book_name") or data.get("name") or "No Title"
+    intro = data.get("intro") or data.get("description") or "Tidak ada sinopsis."
+    cover = data.get("cover") or data.get("cover_url") or ""
+    
+    if len(intro) > 700:
+        intro = intro[:700] + "..."
+        
+    image_html = f"<a href='{cover}'>&#8203;</a>" if cover else ""
+    msg_text = f"{image_html}<b>🎬 {title}</b>\n\n📝 <b>Sinopsis:</b>\n<i>{intro}</i>\n\n🆔 ID: <code>{book_id}</code>"
+    
+    buttons = [
+        [Button.inline("🚀 Mulai Download", f"confirmdl_{book_id}".encode())],
+        [Button.inline("⏪ Kembali ke Hasil", b"shpage_back")]
+    ]
+    
+    await event.edit(msg_text, buttons=buttons, parse_mode='html', link_preview=True)
+
+@client.on(events.CallbackQuery(pattern=r'^confirmdl_(.+)'))
+async def on_confirm_download(event):
+    if event.sender_id not in ADMIN_IDS:
+        return
+        
     book_id = event.pattern_match.group(1).decode()
     chat_id = event.chat_id
-
     
     if BotState.limit.locked():
         await event.answer("⚠️ Semua slot penuh (maks 3). Mohon tunggu sebentar!", alert=True)
         return
         
-    await event.answer("Mulai memproses...")
-    status_msg = await client.send_message(chat_id, f"⏳ Memulai download drama ID: `{book_id}`...")
+    await event.answer("Memulai download...")
+    await event.edit(f"⏳ Memulai download drama ID: `{book_id}`...", buttons=None)
+    status_msg = event 
     
     BotState.manual_tasks += 1
     async with BotState.limit:
         try:
-            # If it's the admin, they might want it in AUTO_CHANNEL, 
-            # but for simplicity let's use the chat where they requested it
-            # or keep AUTO_CHANNEL only for auto_mode.
             target_chat = chat_id 
             target_topic = AUTO_TOPIC if target_chat == AUTO_CHANNEL else None
             
             success = await process_drama_full(book_id, target_chat, status_msg, topic_id=target_topic)
             if success:
-                processed_ids.add(book_id)
-                save_processed(processed_ids)
+                logger.info(f"✅ Manual download finished: {book_id}")
+        except Exception as e:
+            logger.error(f"Error manual download: {e}")
         finally:
             BotState.manual_tasks -= 1
 
@@ -471,7 +512,7 @@ async def auto_mode_loop():
             continue
             
         try:
-            interval = 5 if is_initial_run else 15 
+            interval = 5 if is_initial_run else 120 
             logger.info(f"🔍 Scanning for new dramas (Next scan in {interval}m)...")
             
             # Fetch trending from home
@@ -563,8 +604,9 @@ async def auto_mode_loop():
                                 try:
                                     await client.send_message(admin_id, f"🚨 **ERROR**: Auto-mode gagal memproses `{title}`.\nMelanjutkan ke drama berikutnya...")
                                 except: pass
-                            # Prevent hitting API/Telegram rate limits too hard
-                            await asyncio.sleep(10)
+                            # Cooldown 30 minutes after processing
+                            logger.info("💤 Auto-mode cooling down for 30 minutes...")
+                            await asyncio.sleep(30 * 60)
             
             if new_found == 0:
                 logger.info("😴 No new dramas found in this scan.")
